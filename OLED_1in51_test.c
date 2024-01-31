@@ -30,6 +30,7 @@
 ******************************************************************************/
 #include "test.h"
 #include "OLED_1in51.h"
+//#include "../lib/OLED/OLED_1in51.c"
 
 int OLED_1in51_test(void)
 {
@@ -80,14 +81,48 @@ int OLED_1in51_test(void)
     printf("Drawing:page 2\r\n");     
     //Paint_DrawString_EN(10, 0, "waveshare", &Font16, WHITE, WHITE);
     //Paint_DrawString_EN(10, 17, "Hello World", &Font8, WHITE, WHITE);
-    Paint_DrawString_EN(10, 30, "custom text", &Font8, WHITE, WHITE);
     //Paint_DrawNum(10, 30, 123.456789, &Font8, 4, WHITE, WHITE);
     //Paint_DrawNum(10, 43, 987654, &Font12, 5, WHITE, WHITE);
     // Show image on page2
-    OLED_1in51_Display(BlackImage);
+    //OLED_1in51_Display(BlackImage);
+    //DEV_Delay_ms(5000);
     //DEV_Delay_ms(2000); 
-    DEV_Delay_ms(10000);  
-    Paint_Clear(BLACK);   
+    
+    char string[] = "This is a test of the OLED display, and how it looks like for long lines of text.";
+//    char string[] = "short test.";
+      
+    //for(int i = 0; i<100; i++){
+    int limit = 2*strlen(string) + 128;
+    int i = 0;
+    int charcount = 0;
+    //Paint_DrawString_EN(0, 30, string, &Font12, WHITE, WHITE);
+    while(i<limit){
+	int x = 128-i;
+	if(x >=0)
+	{
+	    Paint_DrawString_EN(x, 30, string, &Font12, WHITE, WHITE);
+	}
+	else
+	{
+	    charcount++;
+	    if(charcount%2 == 0){ strncpy(string, strcat(string+1, " "), strlen(string)); }
+	    Paint_DrawString_EN(0, 30, string, &Font12, WHITE, WHITE);
+	}
+	
+	//Paint_DrawString_EN(128-i, 30, string, &Font8, WHITE, WHITE);
+	
+	OLED_1in51_Display(BlackImage);
+	if(x >=0) {DEV_Delay_ms(30);}
+	else {DEV_Delay_ms(60);} 
+	Paint_Clear(BLACK);
+	i++;
+    }
+    //Paint_DrawString_EN(12, 30, "custom text", &Font8, WHITE, WHITE);
+    //OLED_1in51_Display(BlackImage);
+    //Paint_DrawString_EN(12, 30, "next text", &Font8, WHITE, WHITE);
+    //OLED_1in51_Display(BlackImage);      
+    //DEV_Delay_ms(5000);
+    //Paint_Clear(BLACK);
     
     // Drawing on the image
     //printf("Drawing:page 3\r\n");
