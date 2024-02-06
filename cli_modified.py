@@ -75,7 +75,6 @@ async def run_answer(pc, signaling):
     await signaling.send("start")
     await consume_signaling(pc, signaling)
 
-def get
 
 async def run_offer(pc, signaling):
     await signaling.connect()
