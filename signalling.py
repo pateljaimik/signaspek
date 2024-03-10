@@ -1,7 +1,5 @@
-import sys
 import asyncio
 import json
-import logging
 import websockets
 
 from aiortc import RTCIceCandidate, RTCSessionDescription
@@ -14,9 +12,7 @@ def object_from_string(message_str):
     message_data = None
     print(f"Original message: {message}\n")
     if("data" in message.keys()):
-        print("Message has data of lenght: {}, data:{}".format(len(message["data"]),message["data"]))
         message_data = message["data"]
-
     if message["what"] == "call":
         return "start"
     elif message["what"] in ["answer", "offer"]:
@@ -73,7 +69,8 @@ class WebsocketSignaling:
 
     async def close(self):
         if self._websocket is not None and self._websocket.open is True:
-            await self.send(None)
+            print("Closing web socket")
+            await self.send(BYE)
             await self._websocket.close()
 
     async def receive(self):

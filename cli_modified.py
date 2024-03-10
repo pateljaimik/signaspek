@@ -2,18 +2,26 @@ import argparse
 import asyncio
 import logging
 import time
+import queue
+import speech_recognition as sr
+import numpy as np
+import sounddevice as sd
+from multiprocessing import Queue, Process
+import sys
 from signalling import WebsocketSignaling
 
 from aiortc import RTCIceCandidate, RTCPeerConnection, RTCSessionDescription
 from aiortc.contrib.signaling import BYE, add_signaling_arguments, create_signaling
 
-
+audio_queue = queue.Queue()
+reciever_audio_queue= Queue()
+sampling_rate= 8000
 def channel_log(channel, t, message):
     print("channel(%s) %s %s" % (channel.label, t, message))
 
 
 def channel_send(channel, message):
-    channel_log(channel, ">", message)
+    #channel_log(channel, ">", message)
     channel.send(message)
 
 
@@ -50,28 +58,35 @@ def current_stamp():
     else:
         return int((time.time() - time_start) * 1000000)
 
-
 async def run_answer(pc, signaling):
     await signaling.connect()
 
     async def sendMessage(channel):
         while True:
-            channel_send(channel, "Some random message")
-            await asyncio.sleep(1)
+            if(not audio_queue.empty()):
+                channel.send(b''.join(audio_queue.queue))
+                audio_queue.queue.clear()
+            await asyncio.sleep(.5)
 
     @pc.on("datachannel")
     def on_datachannel(channel):
         channel_log(channel, "-", "created by remote party")
 
-        asyncio.ensure_future(sendMessage(channel))
+        #asyncio.ensure_future(sendMessage(channel))
         
         @channel.on("message")
         def on_message(message):
-            channel_log(channel, "<", message)
-
-            if isinstance(message, str) and message.startswith("ping"):
-                # reply
-                channel_send(channel, "pong" + message[4:])
+            #channel_log(channel, "<", message)
+            audio_np = np.frombuffer(message, dtype=np.int16).astype(np.float32) / 32768.0
+            sd.play(audio_np,sampling_rate)
+            try:
+                reciever_audio_queue.put_nowait(audio_np)
+            except  queue.Full:
+                print("Queue is full")
+            print(f"Recieved message is of type:{type(message)}")
+            print(f"Type of each index:{type(message[0])}")
+            print(f"Each sample is of size: {sys.getsizeof(message[0])}")
+    
     await signaling.send("start")
     await consume_signaling(pc, signaling)
 
@@ -82,30 +97,27 @@ async def run_offer(pc, signaling):
     channel = pc.createDataChannel("chat")
     channel_log(channel, "-", "created by local party")
 
-    async def send_pings():
+    async def sendAudio(channel):
         while True:
-            channel_send(channel, "ping %d" % current_stamp())
-            await asyncio.sleep(1)
+            if(not audio_queue.empty()):
+                audio_data=b''.join(audio_queue.queue)
+                channel.send(audio_data)
+                audio_queue.queue.clear()
+                print(f"Sending audio data of lenght: {sys.getsizeof(audio_data)}")
+            await asyncio.sleep(.5)
 
     @channel.on("open")
     def on_open():
-        asyncio.ensure_future(send_pings())
+        asyncio.ensure_future(sendAudio(channel))
 
-    @channel.on("message")
-    def on_message(message):
-        channel_log(channel, "<", message)
-
-        if isinstance(message, str):
-            if message.startswith("pong"):
-                elapsed_ms = (current_stamp() - int(message[5:])) / 1000
-                print(" RTT %.2f ms" % elapsed_ms)
-            else:
-                print(f"Recieved another message:{message}")
-
+    # @channel.on("message")
+    # def on_message(message):
+    #     #channel_log(channel, "<", message)
+    #     print(f"Recieved message is of type:{type(message)}, echoing it back")
+    #     channel_send(channel,message)
 
     # send offer
     await consume_signaling(pc, signaling)
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Data channels ping/pong")
@@ -118,11 +130,46 @@ if __name__ == "__main__":
     if args.verbose:
         logging.basicConfig(level=logging.DEBUG)
 
+    def audio_callback(_, audio:sr.AudioData):
+        data = audio.get_raw_data()
+        audio_queue.put(data)
+
     signaling = WebsocketSignaling("raspberrypi.local","8765")
     pc = RTCPeerConnection()
+    p = None
     if args.role == "offer":
+        recorder = sr.Recognizer()
+        recorder.energy_threshold = 1000
+        recorder.dynamic_energy_threshold = False
+
+        source = sr.Microphone(sample_rate=sampling_rate)
+
+        with source:
+            recorder.adjust_for_ambient_noise(source)
+
+        recorder.listen_in_background(source, audio_callback, phrase_time_limit=1.2)
+        print("Microphone initialized")
         coro = run_offer(pc, signaling)
     else:
+        import whisper
+        import torch
+        dummy_queue= Queue()
+            #  while True:
+            #      audio_data = None
+            #      try:
+            #          audio_data=queue.get()
+            #          result = model.transcribe(audio_data, fp16=torch.cuda.is_available())
+            #          text = result['text'].strip()
+            #          print(text)
+            #      except queue.empty:
+            #          time.sleep(.05)
+        
+        print("Cuda device is {}".format("available" if torch.cuda.is_available() else "not available"))
+        audio_model = whisper.load_model("medium.en",device="cuda")
+        print("Model loaded.")
+        # p = Process(target=process_audio,args=())
+        # p.start()
+       # print("Process started")
         coro = run_answer(pc, signaling)
 
     # run event loop
@@ -130,7 +177,12 @@ if __name__ == "__main__":
     try:
         loop.run_until_complete(coro)
     except KeyboardInterrupt:
+        print("Recieved keyboard interrupt")
         pass
     finally:
+        reciever_audio_queue.close()
+             
+        
+        audio_queue.join()
         loop.run_until_complete(pc.close())
         loop.run_until_complete(signaling.close())
