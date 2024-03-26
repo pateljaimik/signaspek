@@ -9,6 +9,12 @@ from queue import Queue
 from tempfile import NamedTemporaryFile
 from time import sleep
 
+import numpy as np
+import scipy.io.wavfile as wavfile
+import scipy.signal as signal
+
+
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -20,14 +26,14 @@ def main():
                         help="Energy level for mic to detect.", type=int)
     parser.add_argument("--record_timeout", default=2,
                         help="How real time the recording is in seconds.", type=float)
-    parser.add_argument("--phrase_timeout", default=3,
+    parser.add_argument("--phrase_timeout", default=1,## Default was 3
                         help="How much empty space between recordings before we "
                              "consider it a new line in the transcription.", type=float)
     args = parser.parse_args()
 
     model = args.model
     if args.model != "large" and not args.non_english:
-        model = model## + ".en"
+        model = model + ".en"################################################## toggle between english only and all languages, Leave on EN as multilanguage support not yet ready
     audio_model = whisper.load_model(model)
 
     record_timeout = args.record_timeout
@@ -47,11 +53,62 @@ def main():
     recorder = sr.Recognizer()
     recorder.energy_threshold = args.energy_threshold
     # Definitely do this, dynamic energy compensation lowers the energy threshold dramtically to a point where the SpeechRecognizer never stops recording.
-    recorder.dynamic_energy_threshold = False
+    recorder.dynamic_energy_threshold =False####True##############################
 
     source = sr.Microphone(sample_rate=16000)
+
+    
+
     with source:
         recorder.adjust_for_ambient_noise(source)
+    
+    
+############################################## Filter Code ######################################################################## 
+
+
+   ###########Filter Parameters
+    cutoff_freq = 800  #All audio below this frequency will be removed 
+    nyquist_freq = source.SAMPLE_RATE / 2
+    order = 2  #higher values for sharper cutoff
+    ripple_db = 0.5  # Adjust as needed (lower values for less distortion)
+
+    
+    b, a = signal.cheby1(order, ripple_db, cutoff_freq / nyquist_freq, btype='high')#This filter should eliminate background noise (Low frequency noise) while preserving the voice
+
+    def apply_filter(data):
+     
+        samples = np.frombuffer(data, dtype=np.int16)# Converts byte string to array of samples
+        
+        # Apply the filter to the samples
+        filtered_samples = signal.filtfilt(b, a, samples)#Applies the  high pass filter defined above
+        
+        
+        filtered_data = filtered_samples.astype(np.int16).tobytes()#Convert filtered samples back to byte string to be interpreted by the model
+        
+        return filtered_data
+
+        
+
+
+    def apply_filter_and_export(data, filename): #Filters and saves recording for verification
+        # Convert byte string to array of samples
+        samples = np.frombuffer(data, dtype=np.int16)# Converts byte string to array of samples
+        
+        # Apply the filter to the samples
+        filtered_samples = signal.filtfilt(b, a, samples)#Applies the high pass filter defined above
+        
+        
+        filtered_samples = filtered_samples.astype(np.int16)
+        filtered_samples_tobytes = filtered_samples.astype(np.int16).tobytes()#Convert filtered samples back to byte string to be interpreted by the model
+        
+        
+        
+        wavfile.write(filename, source.SAMPLE_RATE, filtered_samples)# Saves the filtered version of the last recording as a WAV file for verification
+
+        return filtered_samples_tobytes
+
+
+############################################## Filter Code End ######################################################################## 
 
     def record_callback(_, audio:sr.AudioData) -> None:
         """
@@ -59,15 +116,28 @@ def main():
         audio: An AudioData containing the recorded bytes.
         """
         # Grab the raw bytes and push it into the thread safe queue.
-        data = audio.get_raw_data()
-        data_queue.put(data)
+        #data = audio.get_raw_data()#This is the unfiltered audio data 
+        #data_queue.put(data) #Data being put in to the queue for transcripton
+
+        #data = apply_filter(audio.get_raw_data())  #USE THIS when testing is complete, filter then put in data queue
+        #data_queue.put(data)
+
+        
+        input_samples = np.frombuffer(audio.get_raw_data(), dtype=np.int16) 
+        wavfile.write("input_samples.wav", source.SAMPLE_RATE, input_samples)# Saves the unfiltered version of the last recording as a WAV file for verification
+
+        filtered_samples = apply_filter_and_export(audio.get_raw_data(), "filtered_output.wav") #This is the data being filtered, AND saved as WAV file, use only during testing
+        data_queue.put(filtered_samples)
+            
+
+
 
     # Create a background thread that will pass us raw audio bytes.
     # We could do this manually but SpeechRecognizer provides a nice helper.
     recorder.listen_in_background(source, record_callback, phrase_time_limit=record_timeout)
 
     # Cue the user that we're ready to go.
-    print("Model loaded.\n")
+    print(model,"Model loaded.\n")####################################################################################################
 
     while True:
         try:
@@ -111,6 +181,16 @@ def main():
                 os.system('cls' if os.name=='nt' else 'clear')
                 for line in transcription:
                     print(line)
+                    if(line==''):
+                        print("empty") #If nothing is recorded, this is run to prevent pushing the text if we have nothing to send, "empty" will be removed later##################################################
+                        
+                    
+                    else:
+                        print("Line Output Test");#This runs when something has been transcribed, this is where you should put the communication to the display code sending 'line'##################################################
+                
+
+                    
+                    
                 # Flush stdout.
                 print('', end='', flush=True)
 
@@ -120,8 +200,10 @@ def main():
             break
 
     print("\n\nTranscription:")
+    
     for line in transcription:
         print(line)
+        
 
 
 if __name__ == "__main__":
