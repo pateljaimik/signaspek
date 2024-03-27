@@ -1,6 +1,6 @@
 import asyncio
 import time
-from multiprocessing import JoinableQueue,Queue, Process
+from multiprocessing import JoinableQueue,Queue, Process,Event
 import sounddevice as sd
 import numpy as np
 import sys
@@ -8,8 +8,9 @@ from signalling import WebsocketSignaling,BYE
 
 from aiortc import RTCIceCandidate, RTCPeerConnection, RTCSessionDescription
 
-reciever_audio_queue= JoinableQueue()
-text_queue= JoinableQueue()
+reciever_audio_queue= Queue()
+text_queue= Queue()
+model_started= Event()
 sampling_rate= 16000
 
 def channel_log(channel, t, message):
@@ -37,7 +38,7 @@ async def consume_signaling(pc, signaling):
             break
 
 
-async def processing_client(pc, signaling):
+async def processing_client(pc, signaling,model_ready):
     await signaling.connect()
 
     async def sendText(channel):
@@ -59,9 +60,10 @@ async def processing_client(pc, signaling):
         
         @channel.on("message")
         def on_message(message):
-            audio_np = np.frombuffer(message, dtype=np.int16).astype(np.float32) / 32768.0
             print("Recieved audio data")
-
+            audio_np = np.frombuffer(message, dtype=np.int16).astype(np.float32) / 32768.0
+            if(model_ready.is_set() is False):
+                return
             try:
                 reciever_audio_queue.put_nowait(audio_np)
             except  Queue.Full:
@@ -74,14 +76,14 @@ async def processing_client(pc, signaling):
 
 
 
-def process_audio(audio_queue,text_q):
+def process_audio(audio_queue,text_q,model_ready):
     import whisper
     import torch
 
     print("Cuda device is {}".format("available" if torch.cuda.is_available() else "not available"))
     audio_model = whisper.load_model("medium.en",device="cuda")
     print("Model loaded.")
-
+    model_ready.set()
     while True:
         audio_data = None
         try:
@@ -92,21 +94,21 @@ def process_audio(audio_queue,text_q):
             print("Got text")
             print(text)
             text_q.put_nowait(text)
-            audio_queue.task_done()
+            # audio_queue.task_done()
             
         except Queue.empty:
             time.sleep(.2)
 
 if __name__ == "__main__":
 
-    p = Process(target=process_audio, args=(reciever_audio_queue,text_queue))
+    p = Process(target=process_audio, args=(reciever_audio_queue,text_queue,model_started))
     p.start()
     print("Process started")
 
-    signaling = WebsocketSignaling("raspberrypi.local","8765")
+    signaling = WebsocketSignaling("192.168.86.212","8765")
     
     pc = RTCPeerConnection()
-    coro = processing_client(pc, signaling)
+    coro = processing_client(pc, signaling,model_started)
 
     loop = asyncio.get_event_loop()
     try:
@@ -114,8 +116,8 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("Recieved keyboard interrupt")
     finally:
-        reciever_audio_queue.close()
-        text_queue.close()
+        # reciever_audio_queue.close()
+        # text_queue.close()
         loop.run_until_complete(pc.close())
         loop.run_until_complete(signaling.close())
     p.join()

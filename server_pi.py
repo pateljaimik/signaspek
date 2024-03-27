@@ -47,7 +47,6 @@ async def server(pc, signaling):
                 audio_queue.queue.clear()
                 audio_queue.task_done()
                 print(f"Sending audio data of lenght: {sys.getsizeof(audio_data)} to channel {channel.label}")
-                
             await asyncio.sleep(1)
 
     @channel.on("open")
