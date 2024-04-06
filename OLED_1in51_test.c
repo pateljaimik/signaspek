@@ -28,119 +28,170 @@
 # THE SOFTWARE.
 #
 ******************************************************************************/
-#include "test.h"
-#include "OLED_1in51.h"
-//#include "../lib/OLED/OLED_1in51.c"
+extern "C" {
+    #include "test.h"
+    #include "OLED_1in51.h"
+    }
+//-------------------------------------------Socket Communication-----------------------------------------------------------------------
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <queue>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
 
-int OLED_1in51_test(void)
+#define QUEUE_ELEM 1024
+
+void enqueue(std::queue <std::string> &my_queue, std::mutex &my_mutex, std::condition_variable &my_cVar)
 {
-	printf("1.51inch OLED test demo\n");
-	if(DEV_ModuleInit() != 0) {
-		return -1;
-	}
-	  
-	printf("OLED Init...\r\n");
-	OLED_1in51_Init();
-	DEV_Delay_ms(500);
-    OLED_1in51_Clear();	
-	// 0.Create a new image cache
-	UBYTE *BlackImage;
-	UWORD Imagesize = ((OLED_1in51_WIDTH%8==0)? (OLED_1in51_WIDTH/8): (OLED_1in51_WIDTH/8+1)) * OLED_1in51_HEIGHT;
-	if((BlackImage = (UBYTE *)malloc(Imagesize)) == NULL) {
-			printf("Failed to apply for black memory...\r\n");
-			return -1;
-	}
-	printf("Paint_NewImage\r\n");
-	Paint_NewImage(BlackImage, OLED_1in51_WIDTH, OLED_1in51_HEIGHT, 270, BLACK);	
-	// Paint_SetScale(16);
-	printf("Drawing\r\n");
-	//1.Select Image
-	//Paint_SelectImage(BlackImage);
-	//DEV_Delay_ms(500);
-	//Paint_Clear(BLACK);
+    //-------------------------------------------Socket Communication-----------------------------------------------------------------------
+    int sockfd;
+    struct sockaddr_un serv_addr;
+    char buffer[1024];
+    sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        perror("ERROR opening socket");
+        exit(1);
+    }
+    memset(&serv_addr, 0, sizeof(serv_addr));
+    serv_addr.sun_family = AF_UNIX;
+    strcpy(serv_addr.sun_path, "/tmp/SignaSpek");
+    if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+        perror("ERROR connecting");
+        exit(1);
+    }
+   
+    //-------------------------------------------Socket Communication-----------------------------------------------------------------------
     
-    // 2.Drawing on the image   
-    //printf("Drawing:page 1\r\n");
-    //Paint_DrawPoint(20, 10, WHITE, DOT_PIXEL_1X1, DOT_STYLE_DFT);
-    //Paint_DrawPoint(30, 10, WHITE, DOT_PIXEL_2X2, DOT_STYLE_DFT);
-    //Paint_DrawPoint(40, 10, WHITE, DOT_PIXEL_3X3, DOT_STYLE_DFT);
-    //Paint_DrawLine(10, 10, 10, 20, WHITE, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
-    //Paint_DrawLine(20, 20, 20, 30, WHITE, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
-    //Paint_DrawLine(30, 30, 30, 40, WHITE, DOT_PIXEL_1X1, LINE_STYLE_DOTTED);
-    //Paint_DrawLine(40, 40, 40, 50, WHITE, DOT_PIXEL_1X1, LINE_STYLE_DOTTED);
-    //Paint_DrawCircle(60, 30, 15, WHITE, DOT_PIXEL_1X1, DRAW_FILL_EMPTY);
-    //Paint_DrawCircle(100, 40, 20, WHITE, DOT_PIXEL_1X1, DRAW_FILL_FULL);      
-    //Paint_DrawRectangle(50, 30, 60, 40, WHITE, DOT_PIXEL_1X1, DRAW_FILL_EMPTY);
-    //Paint_DrawRectangle(90, 30, 110, 50, BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);   
-    // 3.Show image on page1
-    //OLED_1in51_Display(BlackImage);
-    //DEV_Delay_ms(2000);      
-    //Paint_Clear(BLACK);
+    while(1)
+    {	
+
+	memset(buffer, 0, sizeof(buffer));
+	ssize_t n = read(sockfd, buffer, sizeof(buffer) - 1);
+	if (n < 0) {
+		perror("ERROR reading from socket");
+		exit(1);
+	}
+	//printf("Received: %s\n", buffer);
+	std::unique_lock  <std::mutex> my_lock(my_mutex);
+	while(my_queue.size() >= QUEUE_ELEM){
+		my_cVar.wait(my_lock);
+	}
+	my_queue.push(buffer);
+	my_cVar.notify_one();
+	my_lock.unlock();
+    }
+    // Close the connection
+    close(sockfd);
+
+    // Remove the socket file
+    unlink("/tmp/SignaSpek");
+}
+
+void dequeue(std::queue <std::string> &my_queue, char buffer[1024], std::mutex &my_mutex, std::condition_variable &my_cVar, int length)
+{
+    int start_size;
+    int new_data_size;
+    int x = 0;
+    int available_space = 1024;
+    char display_buffer[1024];
+    int n = 1024;
+    
+    printf("1.51inch OLED test demo\n");
+    if(DEV_ModuleInit() != 0) {
+	//~ return -1;
+	return;
+    }
+      
+    printf("OLED Init...\r\n");
+    OLED_1in51_Init();
+    DEV_Delay_ms(500);
+    OLED_1in51_Clear();	
+    // 0.Create a new image cache
+    UBYTE *BlackImage;
+    UWORD Imagesize = ((OLED_1in51_WIDTH%8==0)? (OLED_1in51_WIDTH/8): (OLED_1in51_WIDTH/8+1)) * OLED_1in51_HEIGHT;
+    if((BlackImage = (UBYTE *)malloc(Imagesize)) == NULL) {
+		    printf("Failed to apply for black memory...\r\n");
+		    //~ return -1;
+		    return;
+    }
+    printf("Paint_NewImage\r\n");
+    Paint_NewImage(BlackImage, OLED_1in51_WIDTH, OLED_1in51_HEIGHT, 270, BLACK);
+    printf("Drawing\r\n");
+
     
     // Drawing on the image
-    printf("Drawing:page 2\r\n");     
-    //Paint_DrawString_EN(10, 0, "waveshare", &Font16, WHITE, WHITE);
-    //Paint_DrawString_EN(10, 17, "Hello World", &Font8, WHITE, WHITE);
-    //Paint_DrawNum(10, 30, 123.456789, &Font8, 4, WHITE, WHITE);
-    //Paint_DrawNum(10, 43, 987654, &Font12, 5, WHITE, WHITE);
-    // Show image on page2
-    //OLED_1in51_Display(BlackImage);
-    //DEV_Delay_ms(5000);
-    //DEV_Delay_ms(2000); 
+//    printf("Drawing:page 2\r\n");     
     
-    char string[] = "This is a test of the OLED display, and how it looks like for long lines of text.";
-//    char string[] = "short test.";
-      
-    //for(int i = 0; i<100; i++){
-    int limit = 2*strlen(string) + 128;
+    
+    //char string[] = "This is a test of the OLED display, and how it looks like for long lines of text.";
+    
     int i = 0;
-    int charcount = 0;
-    //Paint_DrawString_EN(0, 30, string, &Font12, WHITE, WHITE);
-    while(i<limit){
-	int x = 128-i;
-	if(x >=0)
+    //char count for character scroll
+    int charcount = 0;   
+    while(1)
+    {
+	if(strlen(buffer) == 0)
 	{
-	    Paint_DrawString_EN(x, 30, string, &Font12, WHITE, WHITE);
+	    x = 126;
 	}
+	if(!my_queue.empty()){
+	    std::unique_lock<std::mutex> my_lock(my_mutex);
+    	    n = strlen(my_queue.front().c_str());
+	    available_space = 1024 - strlen(buffer);
+	    new_data_size = available_space < n ? available_space : n;
+	    //strncat(buffer + strlen(buffer), buffer, new_data_size);    
+
+	    strncpy(buffer + strlen(buffer), my_queue.front().c_str(), strlen(my_queue.front().c_str()));
+	    my_queue.pop();
+	    my_cVar.notify_one();
+	    my_lock.unlock();
+	}
+	if(x > 0)
+	{
+	    Paint_DrawString_EN(x, 20, buffer, &Font12, WHITE, WHITE);
+	    x = x-7;
+	}
+
 	else
 	{
 	    charcount++;
-	    if(charcount%2 == 0){ strncpy(string, strcat(string+1, " "), strlen(string)); }
-	    Paint_DrawString_EN(0, 30, string, &Font12, WHITE, WHITE);
+	    if(charcount%1 == 0){ strncpy(buffer, strcat(buffer+1, " \0"), strlen(buffer)); }//display_buffer+1, strlen(display_buffer)-1); }//strcat(display_buffer+1, " "), strlen(display_buffer)); }
+	    Paint_DrawString_EN(0, 20, buffer, &Font12, WHITE, WHITE);
 	}
-	
-	//Paint_DrawString_EN(128-i, 30, string, &Font8, WHITE, WHITE);
-	
+	printf("size of display_buffer: %d\n", strlen(buffer));
+	//~ printf("This is the display_buffer: %s\n", display_buffer);
 	OLED_1in51_Display(BlackImage);
-	if(x >=0) {DEV_Delay_ms(30);}
+	if(x >=0) {DEV_Delay_ms(60);}
 	else {DEV_Delay_ms(60);} 
 	Paint_Clear(BLACK);
 	i++;
     }
-    //Paint_DrawString_EN(12, 30, "custom text", &Font8, WHITE, WHITE);
-    //OLED_1in51_Display(BlackImage);
-    //Paint_DrawString_EN(12, 30, "next text", &Font8, WHITE, WHITE);
-    //OLED_1in51_Display(BlackImage);      
-    //DEV_Delay_ms(5000);
-    //Paint_Clear(BLACK);
-    
-    // Drawing on the image
-    //printf("Drawing:page 3\r\n");
-    //Paint_DrawString_CN(10, 0,"ÄãºÃAbc", &Font12CN, WHITE, WHITE);
-    //Paint_DrawString_CN(0, 20, "Î¢Ñ©µç×Ó", &Font24CN, WHITE, WHITE);
-    // Show image on page3
-    //OLED_1in51_Display(BlackImage);
-    //DEV_Delay_ms(2000);    
-    //Paint_Clear(BLACK); 
-
-    // Drawing on the image
-    //printf("Drawing:page 4\r\n");
-    //GUI_ReadBmp("./pic/1in51.bmp", 0, 0);
-	//OLED_1in51_Display(BlackImage);
-    //DEV_Delay_ms(2000);
-    //Paint_Clear(BLACK); 
 
     OLED_1in51_Clear();
+}
+
+int OLED_1in51_test(void)
+{        
+    //------------------------------------------------ Threading ---------------------------------------------------------------------------
+    std::thread t_enqueue;
+    std::thread t_dequeue;
+    char buffer[1024];// = "This is a test for queueing and threading.";
+    std::queue <std::string> my_queue;
+    std::mutex my_mutex;
+    std::condition_variable my_cVar;
+    char display_buffer[1024];
+    int length = strlen(buffer);
+    //------------------------------------------------ Threading ---------------------------------------------------------------------------
+    
+    t_enqueue = std::thread(enqueue,std::ref(my_queue), std::ref(my_mutex), std::ref(my_cVar));
+    t_dequeue = std::thread(dequeue, std::ref(my_queue), display_buffer, std::ref(my_mutex), std::ref(my_cVar), length);
+    t_enqueue.join();
+    t_dequeue.join();    
 	
     return 0;
 }
