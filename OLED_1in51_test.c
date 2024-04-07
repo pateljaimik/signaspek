@@ -45,6 +45,51 @@ extern "C" {
 #include <condition_variable>
 
 #define QUEUE_ELEM 1024
+char doa_buffer[10];
+void doa(std::mutex &my_mutex, std::condition_variable &my_cVar)
+{
+    //-------------------------------------------Socket Communication-----------------------------------------------------------------------
+    int sockfd;
+    struct sockaddr_un serv_addr;
+    char buffer[10];
+    sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        perror("ERROR opening socket");
+        exit(1);
+    }
+    memset(&serv_addr, 0, sizeof(serv_addr));
+    serv_addr.sun_family = AF_UNIX;
+    strcpy(serv_addr.sun_path, "/tmp/AudioTest");
+    if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+        perror("ERROR connecting");
+        exit(1);
+    }
+   
+    //-------------------------------------------Socket Communication-----------------------------------------------------------------------
+    
+    while(1)
+    {	
+
+	memset(buffer, 0, sizeof(buffer));
+	//printf("reached reading socket for doa\n");
+	std::unique_lock  <std::mutex> my_lock(my_mutex);
+	ssize_t n = read(sockfd, doa_buffer, 10);
+	if (n < 0) {
+		perror("ERROR reading from socket");
+		exit(1);
+	}
+	my_cVar.notify_one();
+	my_lock.unlock();
+	printf("For filling:%s\n", doa_buffer);
+	//Paint_DrawString_EN(30, 0, buffer, &Font12, WHITE, WHITE);
+	
+    }
+    // Close the connection
+    close(sockfd);
+
+    // Remove the socket file
+    unlink("/tmp/AudioTest");
+}
 
 void enqueue(std::queue <std::string> &my_queue, std::mutex &my_mutex, std::condition_variable &my_cVar)
 {
@@ -92,7 +137,7 @@ void enqueue(std::queue <std::string> &my_queue, std::mutex &my_mutex, std::cond
     unlink("/tmp/SignaSpek");
 }
 
-void dequeue(std::queue <std::string> &my_queue, char buffer[1024], std::mutex &my_mutex, std::condition_variable &my_cVar, int length)
+void dequeue(std::queue <std::string> &my_queue, char buffer[1024], std::mutex &my_mutex, std::condition_variable &my_cVar, int length, std::mutex &my_mutex2, std::condition_variable &my_cVar2)
 {
     int start_size;
     int new_data_size;
@@ -151,6 +196,12 @@ void dequeue(std::queue <std::string> &my_queue, char buffer[1024], std::mutex &
 	    my_cVar.notify_one();
 	    my_lock.unlock();
 	}
+	
+	std::unique_lock  <std::mutex> my_lock(my_mutex);
+	printf("Getter:%s\n", doa_buffer);
+	Paint_DrawString_EN(0, 0, doa_buffer, &Font12, WHITE, WHITE);
+	my_cVar.notify_one();
+	my_lock.unlock();
 	if(x > 0)
 	{
 	    Paint_DrawString_EN(x, 20, buffer, &Font12, WHITE, WHITE);
@@ -163,7 +214,7 @@ void dequeue(std::queue <std::string> &my_queue, char buffer[1024], std::mutex &
 	    if(charcount%1 == 0){ strncpy(buffer, strcat(buffer+1, " \0"), strlen(buffer)); }//display_buffer+1, strlen(display_buffer)-1); }//strcat(display_buffer+1, " "), strlen(display_buffer)); }
 	    Paint_DrawString_EN(0, 20, buffer, &Font12, WHITE, WHITE);
 	}
-	printf("size of display_buffer: %d\n", strlen(buffer));
+	//printf("size of display_buffer: %d\n", strlen(buffer));
 	//~ printf("This is the display_buffer: %s\n", display_buffer);
 	OLED_1in51_Display(BlackImage);
 	if(x >=0) {DEV_Delay_ms(60);}
@@ -180,18 +231,24 @@ int OLED_1in51_test(void)
     //------------------------------------------------ Threading ---------------------------------------------------------------------------
     std::thread t_enqueue;
     std::thread t_dequeue;
+    std::thread t_doa;
     char buffer[1024];// = "This is a test for queueing and threading.";
+    // char doa_buffer[10];
     std::queue <std::string> my_queue;
     std::mutex my_mutex;
     std::condition_variable my_cVar;
+    std::mutex my_mutex2;
+    std::condition_variable my_cVar2;
     char display_buffer[1024];
     int length = strlen(buffer);
     //------------------------------------------------ Threading ---------------------------------------------------------------------------
     
     t_enqueue = std::thread(enqueue,std::ref(my_queue), std::ref(my_mutex), std::ref(my_cVar));
-    t_dequeue = std::thread(dequeue, std::ref(my_queue), display_buffer, std::ref(my_mutex), std::ref(my_cVar), length);
+    t_doa     = std::thread(doa, std::ref(my_mutex2), std::ref(my_cVar2));
+    t_dequeue = std::thread(dequeue, std::ref(my_queue), display_buffer, std::ref(my_mutex), std::ref(my_cVar), length, std::ref(my_mutex2), std::ref(my_cVar2));
     t_enqueue.join();
-    t_dequeue.join();    
+    t_dequeue.join();
+    t_doa.join();    
 	
     return 0;
 }
