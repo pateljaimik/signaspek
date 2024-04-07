@@ -13,6 +13,7 @@ text_queue= Queue()
 model_started= Event()
 sampling_rate= 16000
 
+
 def channel_log(channel, t, message):
     print("channel(%s) %s %s" % (channel.label, t, message))
 
@@ -79,11 +80,21 @@ async def processing_client(pc, signaling,model_ready):
 def process_audio(audio_queue,text_q,model_ready):
     import whisper
     import torch
+   # import scipy.signal as signal
 
     print("Cuda device is {}".format("available" if torch.cuda.is_available() else "not available"))
     audio_model = whisper.load_model("medium.en",device="cuda")
     print("Model loaded.")
     model_ready.set()
+
+       ###########Filter Parameters
+    # cutoff_freq = 800  #All audio below this frequency will be removed 
+    # nyquist_freq = sampling_rate / 2
+    # order = 2  #higher values for sharper cutoff
+    # ripple_db = 0.5  # Adjust as needed (lower values for less distortion)
+
+    
+    # b, a = signal.cheby1(order, ripple_db, cutoff_freq / nyquist_freq, btype='high')#This filter should eliminate background noise (Low frequency noise) while preserving the voice
     while True:
         audio_data = None
         try:
@@ -105,7 +116,7 @@ if __name__ == "__main__":
     p.start()
     print("Process started")
 
-    signaling = WebsocketSignaling("192.168.86.212","8765")
+    signaling = WebsocketSignaling("192.168.224.212","8765")
     
     pc = RTCPeerConnection()
     coro = processing_client(pc, signaling,model_started)
